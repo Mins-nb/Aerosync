@@ -1,0 +1,514 @@
+import 'package:flutter/material.dart';
+import 'dart:math' as math;
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../services/calorie_service.dart';
+import '../services/exercise_service.dart'; 
+import '../widgets/meal_section.dart';
+import '../widgets/exercise_bar.dart';
+
+class CalorieResultScreen extends StatefulWidget {
+  final double height;
+  final double weight;
+  final double targetWeight;
+  final double bmr;
+  final DateTime startDate;
+  final int durationInDays;
+
+  const CalorieResultScreen({
+    Key? key,
+    required this.height,
+    required this.weight,
+    required this.targetWeight,
+    required this.bmr,
+    required this.startDate,
+    required this.durationInDays,
+  }) : super(key: key);
+
+  @override
+  State<CalorieResultScreen> createState() => _CalorieResultScreenState();
+}
+
+class _CalorieResultScreenState extends State<CalorieResultScreen> {
+  // 계산된 데이터
+  double _dailyCalorieIntake = 0;
+  int _exerciseGoal = 0;
+  double _weightDifference = 0;
+  double _bmi = 0;
+  String _bmiCategory = '';
+  int _daysRequired = 0;
+  DateTime _targetDate = DateTime.now();
+  
+  @override
+  void initState() {
+    super.initState();
+    _calculateValues();
+    _saveCalorieTargets();
+  }
+  
+  // 계산된 모든 값들을 저장하기 위한 통합 메서드
+  void _calculateValues() {
+    // 키를 미터 단위로 변환
+    final heightInMeters = widget.height / 100;
+
+    // BMI 계산
+    _bmi = widget.weight / (heightInMeters * heightInMeters);
+
+    // BMI 카테고리 분류
+    if (_bmi < 18.5) {
+      _bmiCategory = '저체중';
+    } else if (_bmi < 23) {
+      _bmiCategory = '정상';
+    } else if (_bmi < 25) {
+      _bmiCategory = '과체중';
+    } else if (_bmi < 30) {
+      _bmiCategory = '비만';
+    } else {
+      _bmiCategory = '고도비만';
+    }
+
+    // 감량/증가해야 할 체중 계산
+    _weightDifference = widget.weight - widget.targetWeight;
+
+    // 활동 인자 (일반적인 활동량 가정)
+    final activityFactor = 1.55;
+
+    // TDEE (Total Daily Energy Expenditure) 계산
+    final tdee = widget.bmr * activityFactor;
+
+    // 일일 칼로리 섭취량 계산 (목표 기간 고려)
+    if (_weightDifference > 0) { // 체중 감량이 목표인 경우
+      // 목표 기간에 따라 일일 칼로리 적자 계산
+      // 1kg = 7700kcal 가정, 목표 기간에 명시적으로 의존하도록 변경
+      double totalDeficitNeeded = _weightDifference * 7700; // 총 필요 칼로리 적자
+      double dailyDeficit = totalDeficitNeeded / widget.durationInDays; // 하루 필요 칼로리 적자
+      
+      // 하루 적자를 식사(70%)와 운동(30%)으로 분배
+      double dietDeficit = dailyDeficit * 0.7;
+      double exerciseDeficit = dailyDeficit * 0.3;
+      
+      // 최소 안전 섭취량 보장 (1200kcal)
+      _dailyCalorieIntake = math.max(1200, tdee - dietDeficit);
+      
+      // 운동 목표 칼로리 업데이트
+      _exerciseGoal = exerciseDeficit.toInt();
+    } else if (_weightDifference < 0) { // 체중 증가가 목표인 경우
+      // 체중 증가도 기간에 따라 조정
+      double totalSurplusNeeded = _weightDifference.abs() * 7700;
+      double dailySurplus = totalSurplusNeeded / widget.durationInDays;
+      
+      // 증가의 70%는 식사로, 30%는 근육 운동으로 연결
+      _dailyCalorieIntake = tdee + (dailySurplus * 0.7).toInt();
+      _exerciseGoal = math.max(300, (dailySurplus * 0.3).toInt()); // 최소 300kcal 운동 목표
+    } else { // 체중 유지가 목표인 경우
+      _dailyCalorieIntake = tdee;
+      _exerciseGoal = 500; // 기본 500kcal 운동 권장
+    }
+
+    // 운동 목표는 이미 위에서 칼로리 섭취량 계산할 때 설정됨
+
+    // 사용자가 설정한 목표 기간 사용
+    _daysRequired = widget.durationInDays;
+    
+    // 과학적 근거에 기반한 예상 일수 계산 (참고용)
+    int scientificDaysEstimate = 0;
+    if (_weightDifference != 0) {
+      // 1kg 의 지방 = 7700 kcal 가정
+      int calorieDeficitPerDay = (_dailyCalorieIntake < tdee) ? (tdee - _dailyCalorieIntake).round() : 0;
+      calorieDeficitPerDay += _exerciseGoal; // 운동으로 소모하는 칼로리 더하기
+
+      if (calorieDeficitPerDay > 0) {
+        double totalDeficitNeeded = _weightDifference.abs() * 7700; // kg 당 7700kcal
+        scientificDaysEstimate = (totalDeficitNeeded / calorieDeficitPerDay).ceil();
+        // scientificDaysEstimate는 참고용으로 사용할 수 있지만 사용자 설정을 우선함
+      }
+    }
+
+    // 목표 날짜 계산 (수정된 일수 기반)
+    _targetDate = DateTime(widget.startDate.year, widget.startDate.month, widget.startDate.day +
+        (_daysRequired > 0 ? _daysRequired : widget.durationInDays));
+  }
+
+  // 칼로리 및 운동 목표치 저장
+  Future<void> _saveCalorieTargets() async {
+    try {
+      // 칼로리 섭취 목표량 저장 (식사 칼로리 70%만 저장)
+      int mealCalorieTarget = (_dailyCalorieIntake * 0.7).toInt(); // 식사만 해당하는 70%만 저장
+      await CalorieService.saveCalorieTargets(
+        dailyCalorieIntake: mealCalorieTarget,
+        exerciseCalorieTarget: _exerciseGoal,
+      );
+
+      // 운동 목표 칼로리 저장
+      await ExerciseService.setExerciseGoal(_exerciseGoal);
+
+      // 순차적으로 화면 업데이트를 위해 지연
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (mounted) {
+          // 칼로리 바 새로고침
+          CalorieBar.refreshTargetCalorie();
+          CalorieBar.updateKcal(0); // 초기에는 0으로 설정
+
+          // 운동 바 새로고침
+          ExerciseBar.refreshTargetKcal();
+
+          print('칼로리 및 운동 목표치 저장 완료 - 칼로리: ${_dailyCalorieIntake.toInt()}kcal, 운동: ${_exerciseGoal}kcal');
+        }
+      });
+    } catch (e) {
+      print('칼로리 및 운동 목표치 저장 오류: $e');
+    }
+  }
+  
+  // 오늘의 식사 데이터를 불러와 칼로리 바 업데이트
+  Future<void> _loadTodayMeals() async {
+    try {
+      final today = DateTime.now();
+      final formattedDate = '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+      
+      // SharedPreferences에서 식사 데이터 가져오기
+      final prefs = await SharedPreferences.getInstance();
+      var totalCalories = 0;
+      
+      // 아침, 점심, 저녁 데이터 불러오기
+      for (var mealTime in ['Breakfast', 'Lunch', 'Dinner']) {
+        final key = 'meal_${formattedDate}_$mealTime';
+        final jsonData = prefs.getStringList(key) ?? [];
+        
+        // 각 식사의 칼로리 계산
+        for (var item in jsonData) {
+          try {
+            final mealData = json.decode(item);
+            if (mealData['nutrients'] != null && mealData['nutrients']['칼로리'] != null) {
+              final calories = int.tryParse(mealData['nutrients']['칼로리'].toString()) ?? 0;
+              totalCalories += calories;
+            }
+          } catch (e) {
+            print('식사 데이터 파싱 오류: $e');
+          }
+        }
+      }
+      
+      // 칼로리 바 업데이트
+      CalorieBar.updateKcal(totalCalories);
+      print('홈 화면으로 돌아가기 전 데이터 업데이트: 총 $totalCalories kcal 섭취');
+    } catch (e) {
+      print('식사 데이터 로드 오류: $e');
+    }
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        title: const Text('칼로리 계산 결과', style: TextStyle(fontWeight: FontWeight.w600)),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0.5,
+        shadowColor: Colors.black12,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // BMI 정보 카드
+            Card(
+              elevation: 3,
+              shadowColor: Colors.black26,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.grey.shade100),
+                ),
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.monitor_weight_outlined,
+                          color: Color(0xFFFFD600),
+                          size: 22,
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'BMI 결과',
+                          style: TextStyle(
+                            fontSize: 18, 
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF424242),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'BMI: ${_bmi.toStringAsFixed(1)}',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFD600),
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFFFFD600).withOpacity(0.3),
+                                spreadRadius: 0,
+                                blurRadius: 6,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Text(
+                            _bmiCategory,
+                            style: const TextStyle(
+                              color: Colors.black,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            
+            const SizedBox(height: 16),
+            
+            // 칼로리 목표 카드
+            Card(
+              elevation: 3,
+              shadowColor: Colors.black26,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.grey.shade100),
+                ),
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.local_fire_department_outlined,
+                          color: Color(0xFFFFD600),
+                          size: 22,
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          '일일 식사 칼로리',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF424242),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Text(
+                          '${(_dailyCalorieIntake * 0.7).toInt()} kcal',
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _weightDifference > 0 
+                            ? '(${_weightDifference.toStringAsFixed(1)}kg 감량 목표)' 
+                            : _weightDifference < 0 
+                                ? '(${(-_weightDifference).toStringAsFixed(1)}kg 증량 목표)' 
+                                : '(체중 유지)',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '식사: ${(_dailyCalorieIntake * 0.7).toInt()} kcal • 운동: ${_exerciseGoal} kcal',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            
+            const SizedBox(height: 16),
+            
+            // 일정 정보 카드
+            Card(
+              elevation: 3,
+              shadowColor: Colors.black26,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.grey.shade100),
+                ),
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.calendar_month_outlined,
+                          color: Color(0xFFFFD600),
+                          size: 22,
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          '목표 일정',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF424242),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '시작 날짜',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey,
+                              ),
+                            ),
+                            Text(
+                              '${widget.startDate.year}-${widget.startDate.month.toString().padLeft(2, '0')}-${widget.startDate.day.toString().padLeft(2, '0')}',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            const Text(
+                              '목표 날짜',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey,
+                              ),
+                            ),
+                            Text(
+                              '${_targetDate.year}-${_targetDate.month.toString().padLeft(2, '0')}-${_targetDate.day.toString().padLeft(2, '0')}',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    _daysRequired > 0 
+                        ? Text(
+                            '예상 소요 기간: $_daysRequired일',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ],
+                ),
+              ),
+            ),
+            
+            const SizedBox(height: 24),
+            
+            // 버튼
+            SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: ElevatedButton(
+                onPressed: () {
+                  // 칼로리 바 및 운동 바 데이터를 홈으로 돌아가기 전에 강제 새로고침
+                  Future.delayed(const Duration(milliseconds: 100), () {
+                    // 홈 화면으로 넘어가기 전에 강제 새로고침
+                    CalorieBar.refreshTargetCalorie();
+                    ExerciseBar.refreshTargetKcal();
+                  });
+                  
+                  // 오당 식사 등록 데이터도 로드
+                  _loadTodayMeals();
+                  
+                  Navigator.pop(context);
+                  Navigator.pop(context);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFFFD600),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                child: const Text(
+                  '홈으로 돌아가기',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Color _getBMIColor() {
+    if (_bmi < 18.5) {
+      return Colors.blue;
+    } else if (_bmi < 23) {
+      return Colors.green;
+    } else if (_bmi < 25) {
+      return Colors.orange;
+    } else if (_bmi < 30) {
+      return Colors.deepOrange;
+    } else {
+      return Colors.red;
+    }
+  }
+}

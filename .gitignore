@@ -1,0 +1,83 @@
+# Flutter/Dart 관련
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/build/
+.fvm/flutter_sdk
+*.lock
+*.iml
+pubspec.lock
+
+# IDE 관련
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+*.swp
+.DS_Store
+
+# 환경 변수 파일 - API 키 보호를 위해 중요
+.env
+.env.*
+!.env.example
+*.env.dart
+
+# 앱 빌드 출력물
+/ios/Flutter/.last_build_id
+/ios/Flutter/ephemeral
+/ios/Pods/
+/ios/.symlinks/
+/ios/Runner.xcworkspace/xcshareddata/
+/ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/
+/ios/build/
+/android/app/debug
+/android/app/profile
+/android/app/release
+/android/.gradle
+/android/captures/
+/android/gradlew
+/android/gradlew.bat
+/android/local.properties
+/android/gradle/
+/android/key.properties
+
+# 백엔드 관련
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+meal_backend/venv/
+meal_backend/.env
+meal_backend/__pycache__/
+meal_backend/storage/
+meal_backend/food_index_chroma/
+
+# 데이터베이스 파일
+*.db
+*.sqlite3
+*.sqlite
+
+# 코드 커버리지
+coverage/
+.test_coverage.dart
+.coverage
+coverage_badge.svg
+
+# 로그 파일
+*.log
+
+# OpenAI API 키가 포함될 수 있는 빌드 파일들
+**/flutter_assets/.env
+
+# 기타
+.history/
+.metadata
+.dart_tool/
